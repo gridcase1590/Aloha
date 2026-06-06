@@ -1,0 +1,15 @@
+# builds
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+*.suo
+*.userprefs
+
+AlohaProfile/
+
+aloha_crash.txt
+
+Thumbs.db
+desktop.ini
+.DS_Store

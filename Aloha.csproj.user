@@ -1,0 +1,63 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup />
+  <ItemGroup>
+    <Compile Update="BevelPanel.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Update="BrowserConfigPanel.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="BrowserStylePanel.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="ConsoleWindow.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="DafyFrame.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="DarkScrollBar.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Update="FileExplorerWindow.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="FileTreeView.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Update="Form1.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="InterceptPanel.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="LiteFrame.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="LiveHeadersPanel.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="NetGraphPanel.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="NetworkPanel.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="ProxyPanel.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="RawTcpPanel.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="RoundButton.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Update="SiteMapPanel.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Update="WebScrollBar.cs">
+      <SubType>Component</SubType>
+    </Compile>
+  </ItemGroup>
+</Project>
