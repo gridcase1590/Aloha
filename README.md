@@ -1,5 +1,6 @@
 # Aloha
 ### Tropical Browser
+Warning: This is a freedom oriented browser. Not a privacy one.
 
 A Win9x-flavored shell built
 around the Chromium engine (Microsoft Edge WebView2). - for now.
