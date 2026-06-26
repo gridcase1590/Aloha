@@ -32,10 +32,11 @@ namespace Aloha
         const int EM_GETFIRSTVISIBLELINE = 0x00CE;
 
         public bool Horizontal { get; private set; }
+        public bool NoArrows { get; set; }   // track + thumb only (no arrow buttons)
         private readonly bool isLight;
         private Color cFace, cTrack, cHi, cHi2, cLo, cLo2, cTrackSh1, cTrackSh2, cArrow;
 
-        private TextBox target;
+        private TextBoxBase target;   // TextBox or RichTextBox — both scroll via EM_LINESCROLL
         private Control scrollable;   // generic target (TreeView/ListBox/...) driven via WM_*SCROLL
         private Timer poll;
 
@@ -75,7 +76,7 @@ namespace Aloha
             BackColor = cFace;
         }
 
-        public void Attach(TextBox tb)
+        public void Attach(TextBoxBase tb)
         {
             target = tb;
             target.TextChanged += (s, e) => Invalidate();
@@ -116,6 +117,95 @@ namespace Aloha
             Invalidate();
         }
 
+        // Apply an absolute 0..1 scroll fraction to the generic scrollable target.
+        // Synthetic WM_*SCROLL/SB_THUMBPOSITION (ScrollToPos) is only honored by
+        // native common controls (TreeView/ListBox); EDIT-based TextBoxes and .NET
+        // AutoScroll panels ignore it, so dispatch to the mechanism each one obeys.
+        private void ScrollToFraction(float f)
+        {
+            if (scrollable == null || !scrollable.IsHandleCreated) return;
+            f = Math.Max(0f, Math.Min(1f, f));
+
+            var tb = scrollable as TextBoxBase;
+            if (tb != null)
+            {
+                if (Horizontal) return;   // horizontal text scroll stays char-approximate
+                int total = Math.Max(1, SendMessage(tb.Handle, EM_GETLINECOUNT, IntPtr.Zero, IntPtr.Zero).ToInt32());
+                int lineH = Math.Max(1, TextRenderer.MeasureText("Wg", tb.Font).Height);
+                int vis   = Math.Max(1, tb.ClientSize.Height / lineH);
+                int targetLine = (int)(f * Math.Max(0, total - vis));
+                int firstLine  = SendMessage(tb.Handle, EM_GETFIRSTVISIBLELINE, IntPtr.Zero, IntPtr.Zero).ToInt32();
+                int delta = targetLine - firstLine;
+                if (delta != 0) SendMessage(tb.Handle, EM_LINESCROLL, IntPtr.Zero, (IntPtr)delta);
+                Invalidate();
+                return;
+            }
+
+            var sc = scrollable as ScrollableControl;
+            if (sc != null && sc.AutoScroll)
+            {
+                var cur = sc.AutoScrollPosition;   // reads back negative
+                int maxX = Math.Max(0, sc.DisplayRectangle.Width  - sc.ClientSize.Width);
+                int maxY = Math.Max(0, sc.DisplayRectangle.Height - sc.ClientSize.Height);
+                if (Horizontal) sc.AutoScrollPosition = new Point((int)(f * maxX), -cur.Y);
+                else            sc.AutoScrollPosition = new Point(-cur.X, (int)(f * maxY));
+                Invalidate();
+                return;
+            }
+
+            // native common controls — the WM_*SCROLL thumb path works here
+            var inf = GetSI();
+            int range = Math.Max(1, (inf.nMax - (int)inf.nPage + 1) - inf.nMin);
+            ScrollToPos(inf.nMin + (int)(f * range));
+        }
+
+        // Relative step for the generic scrollable target (arrow buttons / track
+        // paging). |delta| <= 1 is an arrow nudge; larger is a page. Same type
+        // dispatch as ScrollToFraction so all three control kinds respond.
+        private void StepScrollable(int delta)
+        {
+            if (scrollable == null || !scrollable.IsHandleCreated) return;
+            int dir = Math.Sign(delta);
+            bool page = Math.Abs(delta) > 1;
+            if (dir == 0) return;
+
+            var tb = scrollable as TextBoxBase;
+            if (tb != null)
+            {
+                if (Horizontal) { SendMessage(tb.Handle, EM_LINESCROLL, (IntPtr)delta, IntPtr.Zero); Invalidate(); return; }
+                int lineH = Math.Max(1, TextRenderer.MeasureText("Wg", tb.Font).Height);
+                int vis   = Math.Max(1, tb.ClientSize.Height / lineH);
+                int step  = page ? Math.Max(1, vis - 1) * dir : dir;
+                SendMessage(tb.Handle, EM_LINESCROLL, IntPtr.Zero, (IntPtr)step);
+                Invalidate();
+                return;
+            }
+
+            var sc = scrollable as ScrollableControl;
+            if (sc != null && sc.AutoScroll)
+            {
+                var cur = sc.AutoScrollPosition;
+                if (Horizontal)
+                {
+                    int maxX = Math.Max(0, sc.DisplayRectangle.Width - sc.ClientSize.Width);
+                    int stepPx = page ? (int)(sc.ClientSize.Width * 0.9) : 24;
+                    int newX = Math.Max(0, Math.Min(maxX, -cur.X + dir * stepPx));
+                    sc.AutoScrollPosition = new Point(newX, -cur.Y);
+                }
+                else
+                {
+                    int maxY = Math.Max(0, sc.DisplayRectangle.Height - sc.ClientSize.Height);
+                    int stepPx = page ? (int)(sc.ClientSize.Height * 0.9) : 24;
+                    int newY = Math.Max(0, Math.Min(maxY, -cur.Y + dir * stepPx));
+                    sc.AutoScrollPosition = new Point(-cur.X, newY);
+                }
+                Invalidate();
+                return;
+            }
+
+            ScrollToPos(GetSI().nPos + delta);
+        }
+
         private int LineCount()
         {
             if (scrollable != null) { var si = GetSI(); return Math.Max(1, si.nMax - si.nMin + 1); }
@@ -144,9 +234,10 @@ namespace Aloha
         {
             int total = LineCount(), vis = VisibleLines(), first = FirstVisible();
 
-            aRect = new Rectangle(0, 0, Width, ARROW);
-            bRect = new Rectangle(0, Height - ARROW, Width, ARROW);
-            trackRect = new Rectangle(0, ARROW, Width, Math.Max(0, Height - 2 * ARROW));
+            aRect = NoArrows ? Rectangle.Empty : new Rectangle(0, 0, Width, ARROW);
+            bRect = NoArrows ? Rectangle.Empty : new Rectangle(0, Height - ARROW, Width, ARROW);
+            trackRect = NoArrows ? new Rectangle(0, 0, Width, Height)
+                                 : new Rectangle(0, ARROW, Width, Math.Max(0, Height - 2 * ARROW));
             cornerRect = Rectangle.Empty;
 
             FillTrack(g, trackRect, true);
@@ -162,9 +253,10 @@ namespace Aloha
             }
             else thumbRect = Rectangle.Empty;
 
-            DrawBevel(g, aRect); DrawBevel(g, bRect);
+            if (!NoArrows) { DrawBevel(g, aRect); DrawBevel(g, bRect); }
             if (!thumbRect.IsEmpty) DrawBevel(g, thumbRect);
 
+            if (!NoArrows)
             using (var p = new Pen(cArrow, 1.4f))
             {
                 int cx = Width / 2;
@@ -175,25 +267,48 @@ namespace Aloha
 
         private void PaintHorizontal(Graphics g)
         {
-            aRect = new Rectangle(0, 0, ARROW, Height);
-            bRect = new Rectangle(Width - ARROW, 0, ARROW, Height);
-            trackRect = new Rectangle(ARROW, 0, Math.Max(0, Width - 2 * ARROW), Height);
+            aRect = NoArrows ? Rectangle.Empty : new Rectangle(0, 0, ARROW, Height);
+            bRect = NoArrows ? Rectangle.Empty : new Rectangle(Width - ARROW, 0, ARROW, Height);
+            trackRect = NoArrows ? new Rectangle(0, 0, Width, Height)
+                                 : new Rectangle(ARROW, 0, Math.Max(0, Width - 2 * ARROW), Height);
             cornerRect = Rectangle.Empty;
 
             FillTrack(g, trackRect, false);
 
             if (trackRect.Width > 8)
             {
-                int thumbW = Math.Max(24, trackRect.Width / 3);
-                int travel = trackRect.Width - thumbW;
-                int tx = trackRect.Left + (int)((float)hScroll / Math.Max(1, hMax) * travel);
-                thumbRect = new Rectangle(tx, 0, thumbW, Height);
+                if (scrollable != null)
+                {
+                    // real position from the control's native SB_HORZ info (TreeView, multiline EDIT)
+                    var si = GetSI();
+                    int total = Math.Max(1, si.nMax - si.nMin + 1);
+                    int vis   = Math.Max(1, (int)si.nPage);
+                    int first = Math.Max(0, si.nPos - si.nMin);
+                    if (total > vis)
+                    {
+                        float frac = (float)vis / total;
+                        int thumbW = Math.Max(24, (int)(trackRect.Width * frac));
+                        int travel = trackRect.Width - thumbW;
+                        int maxFirst = Math.Max(1, total - vis);
+                        int tx = trackRect.Left + (int)((float)first / maxFirst * travel);
+                        thumbRect = new Rectangle(tx, 0, thumbW, Height);
+                    }
+                    else thumbRect = Rectangle.Empty;
+                }
+                else
+                {
+                    int thumbW = Math.Max(24, trackRect.Width / 3);
+                    int travel = trackRect.Width - thumbW;
+                    int tx = trackRect.Left + (int)((float)hScroll / Math.Max(1, hMax) * travel);
+                    thumbRect = new Rectangle(tx, 0, thumbW, Height);
+                }
             }
             else thumbRect = Rectangle.Empty;
 
-            DrawBevel(g, aRect); DrawBevel(g, bRect);
+            if (!NoArrows) { DrawBevel(g, aRect); DrawBevel(g, bRect); }
             if (!thumbRect.IsEmpty) DrawBevel(g, thumbRect);
 
+            if (!NoArrows)
             using (var p = new Pen(cArrow, 1.4f))
             {
                 int cy = Height / 2;
@@ -269,6 +384,7 @@ namespace Aloha
                 if (travel <= 0) return;
                 int tx = Math.Max(trackRect.Left, Math.Min(trackRect.Right - thumbRect.Width, e.X - dragOffset));
                 float frac = (float)(tx - trackRect.Left) / travel;
+                if (scrollable != null) { ScrollToFraction(frac); Invalidate(); return; }
                 int targetCol = (int)(frac * hMax);
                 int delta = targetCol - hScroll;
                 if (delta != 0 && target != null) { SendMessage(target.Handle, EM_LINESCROLL, (IntPtr)delta, IntPtr.Zero); hScroll = targetCol; }
@@ -281,7 +397,7 @@ namespace Aloha
                 int ty = Math.Max(trackRect.Top, Math.Min(trackRect.Bottom - thumbRect.Height, e.Y - dragOffset));
                 float frac = (float)(ty - trackRect.Top) / travel;
                 int targetFirst = (int)(frac * Math.Max(1, total - vis));
-                if (scrollable != null) ScrollToPos(GetSI().nMin + targetFirst);
+                if (scrollable != null) ScrollToFraction(frac);
                 else { int delta = targetFirst - FirstVisible(); if (delta != 0) SendMessage(target.Handle, EM_LINESCROLL, IntPtr.Zero, (IntPtr)delta); }
             }
             Invalidate();
@@ -291,7 +407,7 @@ namespace Aloha
 
         private void Step(int delta)
         {
-            if (scrollable != null) { ScrollToPos(GetSI().nPos + delta); return; }
+            if (scrollable != null) { StepScrollable(delta); return; }
             if (target == null) return;
             if (Horizontal)
             {

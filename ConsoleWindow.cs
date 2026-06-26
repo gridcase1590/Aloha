@@ -8,6 +8,7 @@ using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Aloha.RingStoreCore;   // BookmarkManager, Bookmark
 
 namespace Aloha
 {
@@ -40,12 +41,23 @@ namespace Aloha
     // ============================================================
     public class ConsoleWindow : DafyFrame
     {
+        protected override bool FooterActsAsResizeGrip { get { return false; } }
         private readonly NetConfig cfg;
         private readonly Action<string> openInBrowser;
         private static readonly Color Modern = Color.FromArgb(0xF0, 0xF0, 0xF0);
 
-        private TextBox output;
+        // set by Form1 after construction
+        public Func<string> CurrentUrl;        // the page open in the browser (for 'archive')
+        public BookmarkManager Bookmarks;      // saved bookmarks (for 'bookmarks')
+
+        private RichTextBox output;
         private TextBox input;
+
+        // man-page palette: bright/bold headers, body green, underlined references
+        private static readonly Color ClrBody   = Color.FromArgb(0x33, 0xFF, 0x66);
+        private static readonly Color ClrHeader = Color.FromArgb(0x7C, 0xFF, 0x9E);
+        private static readonly Color ClrRef    = Color.FromArgb(0x66, 0xFF, 0x99);
+        private Font fReg, fBold, fUnder, fBoldUnder;
 
         // staged request state
         private string reqMethod = "GET";
@@ -75,16 +87,22 @@ namespace Aloha
             ShowInTaskbar = true;
             ClientArea.BackColor = Color.Black;
 
-            output = new TextBox
+            output = new RichTextBox
             {
-                Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.None,
-                WordWrap = false, BackColor = Color.Black, ForeColor = Color.FromArgb(0x33, 0xFF, 0x66),
+                ReadOnly = true, WordWrap = false, DetectUrls = false,
+                ScrollBars = RichTextBoxScrollBars.None,
+                BackColor = Color.Black, ForeColor = ClrBody,
                 Font = new Font("Consolas", 10f), BorderStyle = BorderStyle.None,
                 Dock = DockStyle.None
             };
+            fReg       = new Font(output.Font, FontStyle.Regular);
+            fBold      = new Font(output.Font, FontStyle.Bold);
+            fUnder     = new Font(output.Font, FontStyle.Underline);
+            fBoldUnder = new Font(output.Font, FontStyle.Bold | FontStyle.Underline);
             var vbar = new DarkScrollBar(false, light: true) { Dock = DockStyle.None };
             var hbar = new DarkScrollBar(true,  light: true) { Dock = DockStyle.None };
             var corner = new Panel { BackColor = Modern };   // bottom-right scrollbar corner
+            StyleAlohaCorner(corner, false);                 // aloha resize arrow (grip wired below)
 
             // ── input + Send live in the shared one-row footer (left side),
             //    beside the frame's indents + max/close on the right ──
@@ -131,6 +149,7 @@ namespace Aloha
             ClientArea.Controls.Add(vbar);
             ClientArea.Controls.Add(hbar);
             ClientArea.Controls.Add(corner);
+            MakeResizeGrip(corner);          // resize from the scrollbar-intersection square
             ClientArea.Resize += (s, e) => LayoutMain();
             vbar.Attach(output);
             hbar.Attach(output);
@@ -143,9 +162,13 @@ namespace Aloha
 
         private void Banner()
         {
-            Print("ALOHA CONSOLE  —  type 'help'");
-            Print("proxy: " + ProxyDesc());
-            Print("request crafting + structure discovery. live headers stream in their own panel.");
+            Print("ALOHA CONSOLE");
+            Print("    request crafting + structure discovery");
+            Print("");
+            Print("PROXY");
+            Print("    " + ProxyDesc());
+            Print("");
+            Print("    type 'help' for commands \u2014 live headers stream in their own panel.");
             Print("");
         }
 
@@ -156,9 +179,102 @@ namespace Aloha
             return cfg.ProxyScheme + "://" + cfg.ProxyHost + ":" + cfg.ProxyPort;
         }
 
+        // ── styled output (man-page look): bold UPPERCASE headers, underlined
+        //    references (URLs / paths / .clos / .onion / host.tld), body green ──
         private void Print(string s)
         {
-            output.AppendText(s + "\r\n");
+            if (output == null || output.IsDisposed) return;
+            s = s ?? "";
+
+            if (IsHeaderLine(s))
+                AppendRun(s, ClrHeader, true, false);
+            else if (s.StartsWith("> "))            // command echo -> bright prompt
+            {
+                AppendRun("> ", ClrHeader, true, false);
+                AppendInline(s.Substring(2));
+            }
+            else
+                AppendInline(s);
+
+            AppendRun("\r\n", ClrBody, false, false);
+            output.SelectionStart = output.TextLength;
+            output.ScrollToCaret();
+        }
+
+        // append one styled run at the end of the feed
+        private void AppendRun(string text, Color color, bool bold, bool underline)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            int start = output.TextLength;
+            output.AppendText(text);
+            output.Select(start, text.Length);
+            output.SelectionColor = color;
+            output.SelectionFont = bold ? (underline ? fBoldUnder : fBold)
+                                        : (underline ? fUnder : fReg);
+            output.Select(output.TextLength, 0);
+        }
+
+        // body text with reference-looking tokens underlined (skipped for big blobs)
+        private void AppendInline(string s)
+        {
+            if (s.Length == 0) return;
+            if (s.Length > 400) { AppendRun(s, ClrBody, false, false); return; }  // big dumps: plain + fast
+
+            int i = 0;
+            while (i < s.Length)
+            {
+                if (s[i] == ' ' || s[i] == '\t')
+                {
+                    int j = i; while (j < s.Length && (s[j] == ' ' || s[j] == '\t')) j++;
+                    AppendRun(s.Substring(i, j - i), ClrBody, false, false);
+                    i = j;
+                }
+                else
+                {
+                    int j = i; while (j < s.Length && s[j] != ' ' && s[j] != '\t') j++;
+                    string tok = s.Substring(i, j - i);
+                    bool isRef = LooksLikeRef(tok);
+                    AppendRun(tok, isRef ? ClrRef : ClrBody, false, isRef);
+                    i = j;
+                }
+            }
+        }
+
+        // a section header: ALL-CAPS line (or an === / --- rule), not indented
+        private static bool IsHeaderLine(string line)
+        {
+            if (string.IsNullOrEmpty(line)) return false;
+            if (line[0] == ' ' || line[0] == '\t') return false;
+            if (line.StartsWith("> ")) return false;
+            if (line.StartsWith("===") || line.StartsWith("---")) return true;
+            bool anyLetter = false;
+            foreach (char c in line)
+                if (char.IsLetter(c)) { anyLetter = true; if (char.IsLower(c)) return false; }
+            return anyLetter && line.Length <= 60;
+        }
+
+        // URL / path / .clos / .onion / host.tld -> underline like a man cross-reference
+        private static bool LooksLikeRef(string t)
+        {
+            if (string.IsNullOrEmpty(t)) return false;
+            string x = t.Trim().TrimEnd('.', ',', ')', ':', ';', ']');
+            if (x.Length < 3) return false;
+            if (x.IndexOf("://", StringComparison.Ordinal) >= 0) return true;
+            if (x[0] == '/') return true;
+            if (x.EndsWith(".clos", StringComparison.OrdinalIgnoreCase) ||
+                x.EndsWith(".onion", StringComparison.OrdinalIgnoreCase)) return true;
+            if (x.IndexOf('.') > 0)
+            {
+                bool hasLetter = false;
+                foreach (char c in x)
+                {
+                    if (!(char.IsLetterOrDigit(c) || c == '.' || c == '-' || c == '_' || c == '/')) return false;
+                    if (char.IsLetter(c)) hasLetter = true;
+                }
+                string[] parts = x.Split('.');
+                return hasLetter && parts.Length >= 2 && parts[parts.Length - 1].Length >= 2;
+            }
+            return false;
         }
 
         // ── command entry ──
@@ -209,8 +325,12 @@ namespace Aloha
                 case "wayback": _ = Wayback(arg); break;
                 case "discover": _ = Discover(arg); break;
 
+                case "archive": _ = Archive(arg); break;
+
                 case "results": ShowResults(); break;
                 case "open": OpenResult(arg); break;
+                case "bookmarks":
+                case "bm": BookmarksCmd(); break;
 
                 default: Print("unknown command: " + cmd + "   (type 'help')"); break;
             }
@@ -218,31 +338,103 @@ namespace Aloha
 
         private void Help()
         {
-            Print(@"commands:
-  help                  this list
-  clear                 clear screen
-  proxy                 show the proxy the console uses
-  save                  save this console's output to a file
-  (live request/response headers stream in the 'Live headers' panel)
+            Print("COMMANDS");
+            Print("    help              show this list");
+            Print("    clear             clear the screen");
+            Print("    proxy             show the proxy the console uses");
+            Print("    save              save this output to a file");
+            Print("");
+            Print("ARCHIVE  \u00b7  DISCOVERY");
+            Print("    archive [URL]     save a fresh snapshot to web.archive.org");
+            Print("                      no URL = the page open in the browser");
+            Print("    wayback URL       list existing archive.org snapshots");
+            Print("    discover DOMAIN   crt.sh subdomains + sitemap + robots + CDX");
+            Print("");
+            Print("RESULTS");
+            Print("    bookmarks  (bm)   list saved bookmarks as open-able results");
+            Print("    results           re-show the current named results");
+            Print("    open NAME         open a named result in the browser");
+            Print("");
+            Print("REQUEST CRAFTING");
+            Print("    method NAME       set method (GET, POST, HEAD, PUT, DELETE)");
+            Print("    header NAME VAL   stage a header for the next request");
+            Print("    headers           show staged headers");
+            Print("    body TEXT         set the request body");
+            Print("    get URL           quick GET, prints the raw response");
+            Print("    req               fire the staged request (asks for URL)");
+            Print("    preset save|load|list NAME");
+            Print("");
+            Print("    live request/response headers stream in the 'Live headers' panel.");
+        }
 
-  request crafting (write everything yourself):
-    method NAME         set method (GET, POST, HEAD, PUT, DELETE, ...)
-    header NAME VALUE   stage a header for the next request
-    headers             show staged headers
-    body TEXT           set the request body
-    get URL             quick GET, prints raw response
-    req                 fire the staged method/headers/body (asks URL)
-    preset save NAME    save the staged request
-    preset load NAME    load a saved request
-    preset list         list saved presets
+        // Save Page Now: capture a fresh snapshot of a URL (or the current page)
+        // on web.archive.org, then expose it as the 'archive' named result.
+        private async Task Archive(string arg)
+        {
+            string url = string.IsNullOrWhiteSpace(arg)
+                       ? (CurrentUrl != null ? CurrentUrl() : "")
+                       : arg.Trim();
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                Print("usage: archive [URL]   (no URL = the page open in the browser)");
+                return;
+            }
+            if (!url.Contains("://")) url = "http://" + url;
 
-  discovery (reads public/published data only):
-    wayback URL         archive.org snapshots -> named list
-    discover DOMAIN     crt.sh subdomains + sitemap + robots + CDX
+            Print("archiving via web.archive.org: " + url);
+            Print("(Save Page Now — this can take 10-30s)");
+            try
+            {
+                using (var client = BuildClient())
+                {
+                    var resp = await client.GetAsync("https://web.archive.org/save/" + url);
+                    Print("HTTP " + (int)resp.StatusCode + " " + resp.StatusCode);
 
-  results:
-    results             re-show current named results
-    open NAME           open a named result in the browser");
+                    string snap = null;
+                    IEnumerable<string> v;
+                    if (resp.Headers.TryGetValues("Content-Location", out v))
+                        foreach (var s in v) { snap = "https://web.archive.org" + s; break; }
+                    if (snap == null && resp.Headers.Location != null)
+                    {
+                        string loc = resp.Headers.Location.ToString();
+                        snap = loc.StartsWith("http") ? loc : "https://web.archive.org" + loc;
+                    }
+
+                    if (snap != null)
+                    {
+                        results["archive"] = snap;
+                        Print("snapshot: " + snap);
+                        Print("type 'open archive' to view it.");
+                    }
+                    else
+                    {
+                        Print("requested. a snapshot URL wasn't returned right away —");
+                        Print("try:  wayback " + url + "   in a moment to list it.");
+                    }
+                }
+            }
+            catch (Exception ex) { Print("archive failed: " + ex.Message); }
+        }
+
+        // List saved bookmarks as named results (b1, b2, ...) so 'open b1' works.
+        private void BookmarksCmd()
+        {
+            if (Bookmarks == null || Bookmarks.Items == null || Bookmarks.Items.Count == 0)
+            {
+                Print("(no bookmarks yet — click the \u2605 in the footer on a page you like)");
+                return;
+            }
+            Print("bookmarks  —  type 'open <name>':");
+            int i = 1;
+            foreach (Bookmark b in Bookmarks.Items)
+            {
+                string name = "b" + i;
+                results[name] = b.Url;
+                string title = string.IsNullOrEmpty(b.Title) ? (b.Host ?? "") : b.Title;
+                if (title.Length > 26) title = title.Substring(0, 25) + "\u2026";
+                Print("  " + name.PadRight(5) + title.PadRight(28) + b.Url);
+                i++;
+            }
         }
 
         private void SaveCmd()
@@ -447,7 +639,8 @@ namespace Aloha
         }
 
         // ── structure / neighbor discovery (public data only) ──
-        private int discoverIdx = 1;
+        private int discoverIdx = 1;   // crt.sh hosts: h1, h2, ...
+        private int pathIdx = 1;       // robots/sitemap paths: p1, p2, ...
 
         private async Task Discover(string domain)
         {
@@ -455,6 +648,7 @@ namespace Aloha
             domain = domain.Replace("http://", "").Replace("https://", "").TrimEnd('/');
             results.Clear();
             discoverIdx = 1;
+            pathIdx = 1;
             Print("=== discovering structure of " + domain + " (public records only) ===");
 
             // 1) Certificate Transparency -> published subdomains
@@ -513,7 +707,8 @@ namespace Aloha
                             if (t.StartsWith("Disallow:") || t.StartsWith("Allow:") || t.StartsWith("Sitemap:"))
                             {
                                 var v = t.Substring(t.IndexOf(':') + 1).Trim();
-                                if (v.Length > 0) found.Add(v);
+                                // skip robots wildcard / anchor patterns (e.g. /*?  /*.php$) — not navigable
+                                if (v.Length > 0 && v.IndexOf('*') < 0 && v.IndexOf('$') < 0) found.Add(v);
                             }
                         }
                     }
@@ -525,7 +720,7 @@ namespace Aloha
                     }
                     foreach (var f in found.Distinct().Take(30))
                     {
-                        string name = "p" + discoverIdx++;
+                        string name = "p" + pathIdx++;
                         string full = f.StartsWith("http") ? f :
                                       ("http://" + url.Replace("http://", "").Split('/')[0] + (f.StartsWith("/") ? "" : "/") + f);
                         results[name] = full;
@@ -550,6 +745,12 @@ namespace Aloha
             if (name.Length == 0) { Print("usage: open NAME   (see 'results')"); return; }
             if (!results.ContainsKey(name)) { Print("no result named '" + name + "'. type 'results'."); return; }
             string url = results[name];
+            Uri u;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out u) || (u.Scheme != "http" && u.Scheme != "https"))
+            {
+                Print("can't open '" + name + "' \u2014 not a navigable URL: " + url);
+                return;
+            }
             Print("opening " + url + " in browser...");
             openInBrowser?.Invoke(url);
         }

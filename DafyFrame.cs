@@ -37,7 +37,8 @@ namespace Aloha
         protected Panel ClientArea;
         private Panel footer;
         private Panel btnMax, btnClose;
-        private BevelPanel fIndentWide, fCube1, fCube2;
+        private BevelPanel fIndentWide, fCube1;
+        private Label sizeReadout;
 
         // drag-to-resize grip state (manual; borderless forms don't resize via HT*)
         private bool gripDragging, gripDidDrag;
@@ -190,7 +191,6 @@ namespace Aloha
             // small decorative indents sit just left of the buttons (right cluster)
             fIndentWide = new BevelPanel { Left = 4, Top = 3, Width = 200, Height = 20, BackColor = cFooter };
             fCube1 = new BevelPanel { Width = 20, Height = 20, Top = 3, BackColor = cFooter };
-            fCube2 = new BevelPanel { Width = 46, Height = 20, Top = 3, BackColor = cFooter };
 
             btnMax = MakeFooterButton("max", () =>
                 WindowState = (WindowState == FormWindowState.Maximized)
@@ -200,11 +200,24 @@ namespace Aloha
 
             footer.Controls.Add(fIndentWide);
             footer.Controls.Add(fCube1);
-            footer.Controls.Add(fCube2);
-            MakeResizeGrip(fCube1);          // the gray footer cubes now resize the window
-            MakeResizeGrip(fCube2);
+            if (FooterActsAsResizeGrip)
+            {
+                MakeResizeGrip(fCube1);      // the gray footer cube resizes the window
+            }
             footer.Controls.Add(btnMax);
             footer.Controls.Add(btnClose);
+
+            // live window-size readout (every DafyFrame window inherits this)
+            sizeReadout = new Label
+            {
+                AutoSize = false, Left = 6, Height = 16, Width = 120, Top = 2,
+                TextAlign = ContentAlignment.MiddleLeft, BackColor = cFooter,
+                ForeColor = Color.FromArgb(0x50, 0x50, 0x50),
+                Font = new Font("Lucida Console", 7.5f, FontStyle.Bold)
+            };
+            fIndentWide.Controls.Add(sizeReadout);
+            sizeReadout.BringToFront();
+
             fIndentWide.SendToBack();   // sits under any subclass footer controls; shows through the gap
             footer.Resize += (s, e) => LayoutFooter();
 
@@ -218,9 +231,24 @@ namespace Aloha
             int w = footer.ClientSize.Width;
             btnClose.Left = w - btnClose.Width - 3;
             btnMax.Left   = btnClose.Left - btnMax.Width - 2;
-            fCube2.Left   = btnMax.Left - fCube2.Width - 6;
-            fCube1.Left   = fCube2.Left - fCube1.Width - 3;
-            fIndentWide.Width = Math.Max(20, fCube1.Left - fIndentWide.Left - 4);
+            fCube1.Left   = btnMax.Left - fCube1.Width - 6;
+            // when the cubes are hidden (window has its own corner grip) the well
+            // runs full-width to the buttons; otherwise it stops before the cubes
+            // so their bevels don't double up with the well's edge.
+            int wellRight = cubesHidden ? (btnMax.Left - 6) : (fCube1.Left - 4);
+            fIndentWide.Width = Math.Max(20, wellRight - fIndentWide.Left);
+            if (sizeReadout != null && sizeReadout.Visible)
+            {
+                sizeReadout.Left = 6;   // left-aligned at the start of the footer strip
+                sizeReadout.Text = this.ClientSize.Width + "\u00D7" + this.ClientSize.Height + " px";
+            }
+        }
+
+        // windows that paint their own footer status call this so the inherited
+        // px readout doesn't show through / overlap underneath it
+        protected void HideSizeReadout()
+        {
+            if (sizeReadout != null) sizeReadout.Visible = false;
         }
 
         // a BLANK indented cube; hover tints (close red, max blue); press pops OUT.
@@ -290,9 +318,91 @@ namespace Aloha
             return b;
         }
 
+        // Hide the gray footer cubes — for windows that put their resize grip on a
+        // scrollbar corner instead. The footer well then extends full-width to the
+        // window buttons so there's no gap where the cubes used to be.
+        protected void HideFooterCubes()
+        {
+            if (fCube1 != null) fCube1.Visible = false;
+            cubesHidden = true;
+            LayoutFooter();
+        }
+        private bool cubesHidden = false;
+
+        // ============================================================
+        // Aloha-window scroll template — the shared "aloha window" body:
+        // a scrollable CANVAS filling the client area, with dark vertical +
+        // horizontal scrollbars (covering the native ones) and a corner
+        // square that doubles as the resize grip. Footer cubes are dropped
+        // (grip lives on the corner). A subclass calls this once, adds its
+        // controls to the returned canvas, and lays them out against
+        // AlohaContent (the rectangle inside the scrollbars), taking
+        // Math.Max with its own minimum so small windows scroll.
+        // ============================================================
+        private DarkScrollBar aVBar, aHBar;
+        private Panel aCanvas, aCorner;
+        private const int ALOHA_SB = 17;
+
+        protected Panel SetupAlohaScroll(Color canvasBack)
+        {
+            HideFooterCubes();   // the resize grip moves to the scrollbar corner
+            aCanvas = new Panel { BackColor = canvasBack, AutoScroll = true };
+            aVBar   = new DarkScrollBar(false, light: true) { Dock = DockStyle.None };
+            aHBar   = new DarkScrollBar(true,  light: true) { Dock = DockStyle.None };
+            aCorner = new Panel { BackColor = cFooter };
+            ClientArea.Controls.Add(aCanvas);
+            ClientArea.Controls.Add(aVBar);
+            ClientArea.Controls.Add(aHBar);
+            ClientArea.Controls.Add(aCorner);
+            // z-order: the canvas fills the whole client area and overlaps the bars'
+            // right/bottom strips, so it must sit BEHIND them or it paints over the
+            // dark scrollbars + corner (Add() lands a control at the front here, same
+            // convention as SendToBack/BringToFront used elsewhere). Drop the canvas to
+            // the back; raise the bars + corner so they (and any native scrollbars they
+            // cover) stay on top.
+            aCanvas.SendToBack();
+            aVBar.BringToFront();
+            aHBar.BringToFront();
+            aCorner.BringToFront();   // corner sits above both bars at the intersection
+            aVBar.AttachScrollable(aCanvas);
+            aHBar.AttachScrollable(aCanvas);
+            MakeResizeGrip(aCorner);
+            ClientArea.Resize += (s, e) => LayoutAlohaScroll();
+            this.Shown        += (s, e) => LayoutAlohaScroll();
+            LayoutAlohaScroll();
+            return aCanvas;
+        }
+
+        // the content rectangle inside the dark scrollbars
+        protected Size AlohaContent
+        {
+            get
+            {
+                int w = ClientArea.ClientSize.Width  - ALOHA_SB;
+                int h = ClientArea.ClientSize.Height - ALOHA_SB;
+                return new Size(Math.Max(1, w), Math.Max(1, h));
+            }
+        }
+
+        private void LayoutAlohaScroll()
+        {
+            if (aCanvas == null) return;
+            int cw = ClientArea.ClientSize.Width, ch = ClientArea.ClientSize.Height;
+            if (cw < ALOHA_SB + 1 || ch < ALOHA_SB + 1) return;
+            aCanvas.SetBounds(0, 0, cw, ch);
+            aVBar.SetBounds(cw - ALOHA_SB, 0, ALOHA_SB, ch - ALOHA_SB);
+            aHBar.SetBounds(0, ch - ALOHA_SB, cw - ALOHA_SB, ALOHA_SB);
+            aCorner.SetBounds(cw - ALOHA_SB, ch - ALOHA_SB, ALOHA_SB, ALOHA_SB);
+        }
+
         // Wire a control (e.g. the scrollbar corner cube) as a bottom-right
         // drag-to-resize grip. Manual tracking — borderless forms don't resize
         // via the native HT* messages. MinimumSize clamps the floor.
+        // Subclasses that put a resize grip elsewhere (e.g. the scrollbar-corner
+        // square in the console/inspector) override this to false so the footer
+        // cubes stop doubling as the grip. Default: footer cubes resize.
+        protected virtual bool FooterActsAsResizeGrip { get { return true; } }
+
         protected void MakeResizeGrip(Control grip)
         {
             grip.Cursor = Cursors.SizeNWSE;
@@ -317,6 +427,17 @@ namespace Aloha
                 if (e.Button != MouseButtons.Left) return;
                 gripDragging = false; gripDidDrag = false;
             };
+        }
+
+        // The aloha resize cube: the gray scrollbar-corner square doubles as the
+        // resize grip (no drawn glyph — it reads as the same cube as the footer).
+        // Give a manually-built scrollbar corner (panels that don't use
+        // SetupAlohaScroll) that same gray cube, optionally wiring it as the grip.
+        protected void StyleAlohaCorner(Panel corner, bool wireGrip)
+        {
+            if (corner == null) return;
+            corner.BackColor = cFooter;
+            if (wireGrip) MakeResizeGrip(corner);
         }
     }
 }

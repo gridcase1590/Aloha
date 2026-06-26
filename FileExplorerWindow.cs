@@ -22,7 +22,7 @@ namespace Aloha
 
         private FileTreeView view;
         private Panel footer;
-        private BevelPanel fIndent, fCube, grip;
+        private BevelPanel fIndent, grip;
         private Label fStatus;
 
         // forwarded from the inner view so Form1 can drive the button label
@@ -56,13 +56,11 @@ namespace Aloha
                 AutoEllipsis = true, Padding = new Padding(4, 0, 4, 0)
             };
             fIndent.Controls.Add(fStatus);
-            fCube = new BevelPanel { Top = 3, Width = 46, Height = 20, BackColor = Modern };
             grip  = new BevelPanel { Top = 3, Width = 20, Height = 20, BackColor = Modern, Cursor = Cursors.SizeNWSE };
             grip.MouseDown += Grip_Down;
             grip.MouseMove += Grip_Move;
             grip.MouseUp   += Grip_Up;
             footer.Controls.Add(fIndent);
-            footer.Controls.Add(fCube);
             footer.Controls.Add(grip);
             footer.Resize += (s, e) => LayoutFooter();
             Controls.Add(footer);
@@ -72,6 +70,7 @@ namespace Aloha
         }
 
         public void FocusView() { view.FocusTree(); }
+        public void NavigateTo(string path) { view.NavigateTo(path); }
 
         private void LayoutOverlay()
         {
@@ -86,9 +85,8 @@ namespace Aloha
         {
             int fw = footer.ClientSize.Width;
             grip.Left    = fw - grip.Width - 3;
-            fCube.Left   = grip.Left - fCube.Width - 3;
             fIndent.Left = 4;
-            fIndent.Width = Math.Max(20, fCube.Left - fIndent.Left - 4);
+            fIndent.Width = Math.Max(20, grip.Left - fIndent.Left - 4);
         }
 
         // ── resize from the footer grip; top-left fixed -> left edge stays on the button line ──

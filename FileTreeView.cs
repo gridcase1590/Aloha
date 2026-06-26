@@ -109,6 +109,24 @@ namespace Aloha
         public void GoHomeDir()   { GoHome(); }
         public void FocusTree()   { try { tree.Focus(); } catch { } }
 
+        // Expand+select a pasted directory (or a file's folder). Tolerates quotes
+        // from "Copy as path". No-op if the path doesn't exist.
+        public void NavigateTo(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return;
+            path = path.Trim().Trim('"');
+            try
+            {
+                if (Directory.Exists(path)) ExpandTo(path);
+                else if (File.Exists(path))
+                {
+                    string dir = System.IO.Path.GetDirectoryName(path);
+                    if (!string.IsNullOrEmpty(dir)) ExpandTo(dir);
+                }
+            }
+            catch { }
+        }
+
         protected override void OnVisibleChanged(EventArgs e)
         {
             base.OnVisibleChanged(e);

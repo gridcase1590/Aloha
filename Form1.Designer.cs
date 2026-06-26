@@ -246,6 +246,7 @@ namespace Aloha
             this.button7.Size = new System.Drawing.Size(129, 28);
             this.button7.TabIndex = 7;
             this.button7.Text = "Change Network IP";
+            this.button7.Click += new System.EventHandler(this.button7_Click);
             this.button7.UseVisualStyleBackColor = true;
             //
             this.button8.BackColor = System.Drawing.SystemColors.ActiveCaptionText;

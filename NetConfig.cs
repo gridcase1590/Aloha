@@ -1,294 +1,276 @@
+// NetConfig.cs — namespace Aloha.
+//
+// DESERIALIZATION-DEFAULTS FIX: DataContractJsonSerializer builds the object
+// WITHOUT running field initializers or the constructor, so any field missing
+// from an older AlohaNet.json came back as default(T) — i.e. ShowBookmarkButton
+// became FALSE, which silently hid the bookmark star for anyone with an existing
+// config. Defaults now live in SetDefaults(), called from the ctor AND from an
+// [OnDeserializing] hook, so missing keys keep their intended values and only
+// keys actually present in the JSON override them.
+//
+// Proxy defaults to Direct (none); Tor is the one-click Default() preset. Chromium
+// has no "socks5h" scheme, so BuildBrowserArguments normalizes socks5h -> socks5.
+
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
-using System.Text;
-using System.Windows.Forms;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
+using System.Reflection;
 
 namespace Aloha
 {
-    // ============================================================
-    // NetConfig — the browser's networking configuration.
-    // Persisted to AlohaNet.json next to the exe. Builds the
-    // Chromium argument string WebView2 is created with.
-    //
-    // Only the browser's own networking is touched here — never
-    // OS-level routing. This is the right boundary.
-    // ============================================================
-    public class NetConfig
+    [DataContract]
+    public sealed class NetConfig
     {
-        // ── proxy ──
-        public string ProxyScheme = "none";        // none | socks5h | socks5 | http
-        public string ProxyHost   = "127.0.0.1";
-        public int    ProxyPort   = 9050;
-        public string BypassList  = "localhost,127.0.0.1,127.0.255.*";
+        // ---- proxy ----
+        [DataMember] public string ProxyScheme;   // none | socks5h | socks5 | http
+        [DataMember] public string ProxyHost;
+        [DataMember] public int    ProxyPort;
+        [DataMember] public string BypassList;
+        [DataMember] public string ProfileName;
 
-        // ── intercept proxy (Titanium) ──
-        // Runtime-only (deliberately NOT persisted): when on, the browser is
-        // routed through the local intercept proxy, which itself chains to the
-        // upstream above. Starts false every run so we never point at a dead port.
-        public bool CfgUseInterceptProxy = false;
-        public int  InterceptPort        = 8888;
+        // ---- dns ----
+        [DataMember] public string DnsMode;        // remote | local
+        [DataMember] public bool   DohEnabled;
+        [DataMember] public string DohEndpoint;
+        [DataMember] public string HostResolverRules;
 
-        // ── network / resolution ──
-        // DnsMode is informational for the user; the actual remote-vs-local
-        // resolution is driven by the proxy scheme (socks5h = remote).
-        public string DnsMode          = "remote"; // remote | local
-        public string DohEndpoint      = "";        // empty = default/off
-        public bool   DohEnabled       = false;
-        public string HostResolverRules = "";       // e.g. MAP fbi.gov.clos 127.0.255.218
-        public string UserAgent        = "";        // empty = engine default
+        // ---- intercept ----
+        [DataMember] public int InterceptPort;
 
-        public string ProfileName = "Clossys";
+        // ---- user agent / wallpaper ----
+        [DataMember] public string UserAgent;
+        [DataMember] public string Wallpaper;
+        [DataMember] public bool   WallpaperEnabled;
 
-        // ── appearance ──
-        public string Wallpaper = "blueprint.svg";   // home-page wallpaper file (served via virtual host)
-        public bool   WallpaperEnabled = true;        // false = plain dark home page, no wallpaper
+        // ---- search ----
+        // Query URL with {q} = the escaped search terms. Blank = auto: Startpage's .onion
+        // service when the proxy points at Tor (so the query stays in-network), clearnet
+        // otherwise. The two presets below are offered in Browser Configuration.
+        [DataMember] public string SearchTemplate;
+        public const string SearchStartpage      = "https://www.startpage.com/sp/search?q={q}";
+        public const string SearchStartpageOnion = "http://startpagel6srwcjlue4zgq3zevrujfaow726kjytqbbjyrswwmjzcqd.onion/sp/search?q={q}";
 
-        // ── browser configuration (privacy / leak toggles) ──
-        // Defaults are the privacy-forward stance; the panel can untick any.
-        // Each maps to one or more Chromium flags in BuildBrowserArguments().
-        //   WebRTC
-        public bool CfgWebRtcLeakFix      = true;   // disable_non_proxied_udp + permission check
-        public bool CfgWebRtcDisableFully = false;  // hard-disable WebRTC entirely
-        //   DNS / prefetch
-        public bool CfgDisableDnsPrefetch    = true;
-        public bool CfgDisablePreconnect     = true;
-        //   phone-home / telemetry
-        public bool CfgDisableSafeBrowsing   = true;   // stops URL hash lookups to Google
-        public bool CfgDisableHyperlinkAudit = true;   // no <a ping> beacons
-        public bool CfgDisableDomainReliability = true;// no reliability uploads to Google
-        public bool CfgDisableComponentUpdate   = true;
-        //   background networking
-        public bool CfgDisableBackgroundNet  = true;
-        public bool CfgDisableSync           = true;
-        //   protocols / fingerprint surface
-        public bool CfgDisableQuic           = true;   // QUIC/UDP off (predictable TCP via proxy)
-        public bool CfgReduceReferrers       = true;   // strict-origin referrer policy
-        public bool CfgDisableMediaDevices   = false;  // off by default (breaks cam/mic if on)
-        //   UI
-        public bool CfgWin9xBrowserScrollbars = false; // wired in Step D (laggy)
+        // ---- privacy / leak flags (-> BuildBrowserArguments) ----
+        [DataMember] public bool CfgWebRtcLeakFix;
+        [DataMember] public bool CfgWebRtcDisableFully;
+        [DataMember] public bool CfgDisableQuic;
+        [DataMember] public bool CfgDisableBackgroundNet;
+        [DataMember] public bool CfgDisableComponentUpdate;
+        [DataMember] public bool CfgDisableDnsPrefetch;
+        [DataMember] public bool CfgDisableDomainReliability;
+        [DataMember] public bool CfgDisableHyperlinkAudit;
+        [DataMember] public bool CfgDisableMediaDevices;
+        [DataMember] public bool CfgDisablePreconnect;
+        [DataMember] public bool CfgDisableSafeBrowsing;
+        [DataMember] public bool CfgDisableSync;
+        [DataMember] public bool CfgReduceReferrers;
+        [DataMember] public bool CfgUseInterceptProxy;
+        [DataMember] public bool CfgWin9xBrowserScrollbars;
+        [DataMember] public bool CfgAllowFridaSandboxOff;   // emits --no-sandbox for INSTR tracing
+        [DataMember] public bool CfgEmbeddedDevTools;       // opens a loopback-only, origin-locked CDP port for the in-frame inspector
 
-        // ---- persistence (tiny hand-rolled JSON; no dependency) ----
-        private static string Path =>
-            System.IO.Path.Combine(
-                System.IO.Path.GetDirectoryName(Application.ExecutablePath),
-                "AlohaNet.json");
+        // Fixed loopback CDP port for the embedded inspector. WebView2 binds this to
+        // 127.0.0.1 only (it refuses external exposure even with --remote-allow-origins=*),
+        // and we origin-lock it below, so it stays a local, foreign-proof surface. Fixed
+        // (not ephemeral) so the inspector knows where to connect without hunting for the
+        // DevToolsActivePort file, which WebView2 buries in its EBWebView subfolder.
+        public const int EmbeddedDevToolsPort = 9333;
 
-        public static NetConfig Load()
+        [DataMember] public bool CfgSnapViewportToGrid;     // round WebView viewport to the SVG grid cell
+        [DataMember] public bool CfgTorLetterbox;           // stricter preset: snap to Tor's 200x100 buckets (requires CfgSnapViewportToGrid)
+        [DataMember] public int  WinWidth;                  // remembered window size (0 = use default)
+        [DataMember] public int  WinHeight;
+        [DataMember] public double WebZoom = 1.0;           // remembered WebView zoom factor
+
+        // ---- live CoreWebView2 settings (-> NetConfigWebView.ApplyLive) ----
+        [DataMember] public int  TrackingPrevention;   // 0 Off 1 Basic 2 Balanced 3 Strict
+        [DataMember] public bool DisableAutofill;
+        [DataMember] public bool DisablePasswordSave;
+        [DataMember] public bool DisableSmartScreen;
+        [DataMember] public bool DisableDevTools;
+        [DataMember] public bool DisableJavaScript;    // -> Settings.IsScriptEnabled = !this
+
+        // ---- content ----
+        [DataMember] public bool   BlockDownloads;     // Form1 DownloadStarting cancels when true
+        [DataMember] public bool   ConfirmDownloads;   // ask before every download (no automatic downloads)
+        [DataMember] public bool   HideDownloadPopup;  // suppress WebView2's built-in download dialog
+        [DataMember] public string DownloadDir;        // fixed download folder ("" = WebView2 default)
+
+        // ---- interface ----
+        [DataMember] public bool ShowBookmarkButton;
+
+        // ---- instruction cockpit / nmap / primarch ----
+        [DataMember] public bool EnableFridaTracing;
+        [DataMember] public int  FridaSampleRate;
+        [DataMember] public bool EnableNmapScanning;
+        [DataMember] public string NmapDefaultTarget;
+        [DataMember] public bool EnablePrimarch;
+
+        public NetConfig() { SetDefaults(); }
+
+        // Runs before the serializer fills present fields, so missing keys keep
+        // these values instead of default(T). THIS is what un-hides the bookmark
+        // button for existing configs.
+        [OnDeserializing]
+        private void OnDeserializing(StreamingContext ctx) { SetDefaults(); }
+
+        private void SetDefaults()
         {
-            try
-            {
-                if (File.Exists(Path))
-                    return Parse(File.ReadAllText(Path));
-            }
-            catch { }
-            return Default();
+            ProxyScheme = "none"; ProxyHost = "127.0.0.1"; ProxyPort = 9050;
+            BypassList  = "localhost,127.0.0.1"; ProfileName = "default";
+
+            DnsMode = "remote"; DohEnabled = false;
+            DohEndpoint = "https://cloudflare-dns.com/dns-query"; HostResolverRules = "";
+
+            InterceptPort = 8888;
+
+            UserAgent = ""; Wallpaper = ""; WallpaperEnabled = true;
+            SearchTemplate = "";   // blank = auto (Startpage onion on Tor, clearnet otherwise)
+
+            CfgWebRtcLeakFix = true;  CfgWebRtcDisableFully = false; CfgDisableQuic = false;
+            CfgDisableBackgroundNet = true; CfgDisableComponentUpdate = false; CfgDisableDnsPrefetch = true;
+            CfgDisableDomainReliability = true; CfgDisableHyperlinkAudit = true; CfgDisableMediaDevices = false;
+            CfgDisablePreconnect = true; CfgDisableSafeBrowsing = false; CfgDisableSync = true;
+            CfgReduceReferrers = true; CfgUseInterceptProxy = false; CfgWin9xBrowserScrollbars = false;
+
+            TrackingPrevention = 2; DisableAutofill = false; DisablePasswordSave = true;
+            DisableSmartScreen = false; DisableDevTools = false; DisableJavaScript = false;
+
+            BlockDownloads = false;
+            ConfirmDownloads = false;
+            HideDownloadPopup = false;
+            DownloadDir = "";
+
+            ShowBookmarkButton = true;
+
+            EnableFridaTracing = false;
+            FridaSampleRate = 10;
+            EnableNmapScanning = false;
+            NmapDefaultTarget = "192.168.1.0/24";
+            EnablePrimarch = false;
         }
 
-        public void Save()
-        {
-            try { File.WriteAllText(Path, ToJson()); } catch { }
-        }
+        static bool Has(string s) { return !string.IsNullOrWhiteSpace(s); }
 
-        public static NetConfig Default()
-        {
-            // ships ready for the .clos network out of the box
-            return new NetConfig
-            {
-                ProfileName = "Clossys",
-                ProxyScheme = "socks5h",
-                ProxyHost = "127.0.0.1",
-                ProxyPort = 9050,
-                BypassList = "localhost,127.0.0.1,127.0.255.*",
-                DnsMode = "remote",
-                DohEnabled = false,
-                DohEndpoint = "",
-                HostResolverRules = "",
-                UserAgent = ""
-            };
-        }
-
-        public static NetConfig DirectProfile()
-        {
-            return new NetConfig
-            {
-                ProfileName = "Direct",
-                ProxyScheme = "none",
-                BypassList = "",
-                DnsMode = "local",
-                DohEnabled = false
-            };
-        }
-
-        // ---- builds the Chromium/WebView2 additional-arguments string ----
         public string BuildBrowserArguments()
         {
-            var args = new List<string>();
+            var a = new List<string>();
+
+            if (CfgWebRtcDisableFully)
+                a.Add("--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
+            else if (CfgWebRtcLeakFix)
+                a.Add("--force-webrtc-ip-handling-policy=default_public_interface_only");
+
+            if (CfgDisableQuic)              a.Add("--disable-quic");
+            if (CfgDisableBackgroundNet)     a.Add("--disable-background-networking");
+            if (CfgDisableComponentUpdate)   a.Add("--disable-component-update");
+            if (CfgDisableDnsPrefetch)       a.Add("--dns-prefetch-disable");
+            if (CfgDisableDomainReliability) a.Add("--disable-domain-reliability");
+            if (CfgDisableHyperlinkAudit)    a.Add("--no-pings");
+            if (CfgDisableSync)              a.Add("--disable-sync");
+            if (CfgReduceReferrers)          a.Add("--no-referrers"); // NOTE: kills ALL referrers
 
             if (CfgUseInterceptProxy)
             {
-                // Everything goes to the local intercept proxy (Titanium). It
-                // chains to the upstream (Tor/SOCKS/HTTP) itself, so the privacy
-                // route is preserved — we just insert the MITM in front of it.
-                args.Add($"--proxy-server=\"http://127.0.0.1:{InterceptPort}\"");
-                if (!string.IsNullOrWhiteSpace(BypassList))
-                    args.Add($"--proxy-bypass-list=\"{BypassList}\"");
+                a.Add("--proxy-server=http://127.0.0.1:" + InterceptPort.ToString(CultureInfo.InvariantCulture));
             }
-            else if (!string.Equals(ProxyScheme, "none", StringComparison.OrdinalIgnoreCase)
-                && !string.IsNullOrWhiteSpace(ProxyHost))
+            else if (!string.Equals(ProxyScheme, "none", StringComparison.OrdinalIgnoreCase) && Has(ProxyHost))
             {
-                // socks5h:// in Chromium semantics resolves DNS proxy-side.
-                // Chromium's --proxy-server takes socks5:// for SOCKS5; remote
-                // DNS for SOCKS5 is the default behaviour in Chromium, so this
-                // gives Tor-side resolution of .clos / .onion.
-                string scheme = ProxyScheme.ToLowerInvariant();
-                string chromiumScheme = scheme == "socks5h" ? "socks5" : scheme;
-                args.Add($"--proxy-server=\"{chromiumScheme}://{ProxyHost}:{ProxyPort}\"");
-
-                if (!string.IsNullOrWhiteSpace(BypassList))
-                    args.Add($"--proxy-bypass-list=\"{BypassList}\"");
+                string scheme = string.Equals(ProxyScheme, "socks5h", StringComparison.OrdinalIgnoreCase)
+                              ? "socks5" : ProxyScheme;
+                a.Add("--proxy-server=" + scheme + "://" + ProxyHost + ":" + ProxyPort.ToString(CultureInfo.InvariantCulture));
             }
 
-            if (!string.IsNullOrWhiteSpace(HostResolverRules))
-                args.Add($"--host-resolver-rules=\"{HostResolverRules}\"");
+            if (Has(HostResolverRules)) a.Add("--host-resolver-rules=" + HostResolverRules);
 
-            if (DohEnabled && !string.IsNullOrWhiteSpace(DohEndpoint))
-                args.Add($"--dns-over-https-templates=\"{DohEndpoint}\"");
-
-            // ── browser-configuration privacy/leak toggles ──
-            // WebRTC. NOTE: Chromium removed --disable-webrtc, so a *full* disable
-            // can't be done with a flag any more — it's enforced in the app via a
-            // document-created script (Form1) that strips RTCPeerConnection. The
-            // IP-handling policy below still helps in BOTH modes as defense-in-depth.
-            if (CfgWebRtcLeakFix || CfgWebRtcDisableFully)
+            // DNS-over-HTTPS: opt-in secure resolver. NOTE: when a SOCKS proxy is set
+            // (Tor/socks5h), Chromium resolves DNS remotely through the proxy, so DoH
+            // mainly takes effect in DIRECT or http-proxy modes.
+            if (DohEnabled && Has(DohEndpoint))
             {
-                // ICE/STUN can otherwise enumerate interfaces and make peer
-                // connections that bypass the proxy, leaking the real IP.
-                args.Add("--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
-                args.Add("--enforce-webrtc-ip-permission-check");
+                a.Add("--dns-over-https-mode=secure");
+                a.Add("--dns-over-https-templates=" + DohEndpoint);
             }
 
-            if (CfgDisableDnsPrefetch)
+            // INSTR/Frida instruction tracing needs the renderer un-sandboxed so
+            // Frida can attach. Off by default; this WEAKENS the sandbox and is only
+            // emitted when the user explicitly enables tracing in Browser Configuration.
+            if (CfgAllowFridaSandboxOff)     a.Add("--no-sandbox");
+
+            // Embedded DevTools needs a CDP endpoint. Open one ONLY on explicit
+            // opt-in, bound to loopback with an OS-assigned ephemeral port (written
+            // to DevToolsActivePort), and locked to the self-hosted inspector origin
+            // so no foreign page — local or via DNS-rebinding — can connect. Chromium
+            // itself 403s any DevTools WebSocket whose Origin isn't allow-listed.
+            // Off by default; this is the only thing that opens a local port.
+            if (CfgEmbeddedDevTools)
             {
-                args.Add("--disable-features=NetworkPrediction");
-                args.Add("--dns-prefetch-disable");
+                a.Add("--remote-debugging-port=" + EmbeddedDevToolsPort);
+                a.Add("--remote-debugging-address=127.0.0.1");
+                a.Add("--remote-allow-origins=https://devtools.aloha");
             }
-            if (CfgDisablePreconnect)
-                args.Add("--disable-features=PreconnectToSearch");
 
-            if (CfgDisableSafeBrowsing)
-                args.Add("--safebrowsing-disable-auto-update");
-            if (CfgDisableHyperlinkAudit)
-                args.Add("--no-pings");
-            if (CfgDisableDomainReliability)
-                args.Add("--disable-domain-reliability");
-            if (CfgDisableComponentUpdate)
-                args.Add("--disable-component-update");
-
-            if (CfgDisableBackgroundNet)
-                args.Add("--disable-background-networking");
-            if (CfgDisableSync)
-                args.Add("--disable-sync");
-
-            if (CfgDisableQuic)
-                args.Add("--disable-quic");
-            if (CfgReduceReferrers)
-                args.Add("--no-referrers");
-            if (CfgDisableMediaDevices)
-                args.Add("--use-fake-device-for-media-stream");
-
-            return string.Join(" ", args);
+            return string.Join(" ", a);
         }
 
-        // ---- minimal JSON (flat string/int/bool only) ----
-        public string ToJson()
+        public static NetConfig Default()       // Tor (one click; needs Tor running on 9050)
         {
-            var sb = new StringBuilder();
-            sb.AppendLine("{");
-            sb.AppendLine($"  \"ProfileName\": \"{Esc(ProfileName)}\",");
-            sb.AppendLine($"  \"ProxyScheme\": \"{Esc(ProxyScheme)}\",");
-            sb.AppendLine($"  \"ProxyHost\": \"{Esc(ProxyHost)}\",");
-            sb.AppendLine($"  \"ProxyPort\": {ProxyPort},");
-            sb.AppendLine($"  \"BypassList\": \"{Esc(BypassList)}\",");
-            sb.AppendLine($"  \"DnsMode\": \"{Esc(DnsMode)}\",");
-            sb.AppendLine($"  \"DohEnabled\": {(DohEnabled ? "true" : "false")},");
-            sb.AppendLine($"  \"DohEndpoint\": \"{Esc(DohEndpoint)}\",");
-            sb.AppendLine($"  \"HostResolverRules\": \"{Esc(HostResolverRules)}\",");
-            sb.AppendLine($"  \"UserAgent\": \"{Esc(UserAgent)}\",");
-            sb.AppendLine($"  \"Wallpaper\": \"{Esc(Wallpaper)}\",");
-            sb.AppendLine($"  \"WallpaperEnabled\": {B(WallpaperEnabled)},");
-            sb.AppendLine($"  \"CfgWebRtcLeakFix\": {B(CfgWebRtcLeakFix)},");
-            sb.AppendLine($"  \"CfgWebRtcDisableFully\": {B(CfgWebRtcDisableFully)},");
-            sb.AppendLine($"  \"CfgDisableDnsPrefetch\": {B(CfgDisableDnsPrefetch)},");
-            sb.AppendLine($"  \"CfgDisablePreconnect\": {B(CfgDisablePreconnect)},");
-            sb.AppendLine($"  \"CfgDisableSafeBrowsing\": {B(CfgDisableSafeBrowsing)},");
-            sb.AppendLine($"  \"CfgDisableHyperlinkAudit\": {B(CfgDisableHyperlinkAudit)},");
-            sb.AppendLine($"  \"CfgDisableDomainReliability\": {B(CfgDisableDomainReliability)},");
-            sb.AppendLine($"  \"CfgDisableComponentUpdate\": {B(CfgDisableComponentUpdate)},");
-            sb.AppendLine($"  \"CfgDisableBackgroundNet\": {B(CfgDisableBackgroundNet)},");
-            sb.AppendLine($"  \"CfgDisableSync\": {B(CfgDisableSync)},");
-            sb.AppendLine($"  \"CfgDisableQuic\": {B(CfgDisableQuic)},");
-            sb.AppendLine($"  \"CfgReduceReferrers\": {B(CfgReduceReferrers)},");
-            sb.AppendLine($"  \"CfgDisableMediaDevices\": {B(CfgDisableMediaDevices)},");
-            sb.AppendLine($"  \"CfgWin9xBrowserScrollbars\": {B(CfgWin9xBrowserScrollbars)}");
-            sb.AppendLine("}");
-            return sb.ToString();
+            return new NetConfig
+            {
+                ProxyScheme = "socks5", ProxyHost = "127.0.0.1", ProxyPort = 9050,
+                BypassList = "localhost,127.0.0.1", ProfileName = "tor",
+            };
         }
 
-        private static string B(bool v) => v ? "true" : "false";
-
-        private static string Esc(string s) =>
-            (s ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
-
-        private static NetConfig Parse(string json)
+        public static NetConfig DirectProfile() // no proxy
         {
-            var c = Default();
-            c.ProfileName       = Str(json, "ProfileName", c.ProfileName);
-            c.ProxyScheme       = Str(json, "ProxyScheme", c.ProxyScheme);
-            c.ProxyHost         = Str(json, "ProxyHost", c.ProxyHost);
-            c.ProxyPort         = IntV(json, "ProxyPort", c.ProxyPort);
-            c.BypassList        = Str(json, "BypassList", c.BypassList);
-            c.DnsMode           = Str(json, "DnsMode", c.DnsMode);
-            c.DohEnabled        = BoolV(json, "DohEnabled", c.DohEnabled);
-            c.DohEndpoint       = Str(json, "DohEndpoint", c.DohEndpoint);
-            c.HostResolverRules = Str(json, "HostResolverRules", c.HostResolverRules);
-            c.UserAgent         = Str(json, "UserAgent", c.UserAgent);
-            c.Wallpaper         = Str(json, "Wallpaper", c.Wallpaper);
-            c.WallpaperEnabled  = BoolV(json, "WallpaperEnabled", c.WallpaperEnabled);
-            c.CfgWebRtcLeakFix          = BoolV(json, "CfgWebRtcLeakFix", c.CfgWebRtcLeakFix);
-            c.CfgWebRtcDisableFully     = BoolV(json, "CfgWebRtcDisableFully", c.CfgWebRtcDisableFully);
-            c.CfgDisableDnsPrefetch     = BoolV(json, "CfgDisableDnsPrefetch", c.CfgDisableDnsPrefetch);
-            c.CfgDisablePreconnect      = BoolV(json, "CfgDisablePreconnect", c.CfgDisablePreconnect);
-            c.CfgDisableSafeBrowsing    = BoolV(json, "CfgDisableSafeBrowsing", c.CfgDisableSafeBrowsing);
-            c.CfgDisableHyperlinkAudit  = BoolV(json, "CfgDisableHyperlinkAudit", c.CfgDisableHyperlinkAudit);
-            c.CfgDisableDomainReliability = BoolV(json, "CfgDisableDomainReliability", c.CfgDisableDomainReliability);
-            c.CfgDisableComponentUpdate = BoolV(json, "CfgDisableComponentUpdate", c.CfgDisableComponentUpdate);
-            c.CfgDisableBackgroundNet   = BoolV(json, "CfgDisableBackgroundNet", c.CfgDisableBackgroundNet);
-            c.CfgDisableSync            = BoolV(json, "CfgDisableSync", c.CfgDisableSync);
-            c.CfgDisableQuic            = BoolV(json, "CfgDisableQuic", c.CfgDisableQuic);
-            c.CfgReduceReferrers        = BoolV(json, "CfgReduceReferrers", c.CfgReduceReferrers);
-            c.CfgDisableMediaDevices    = BoolV(json, "CfgDisableMediaDevices", c.CfgDisableMediaDevices);
-            c.CfgWin9xBrowserScrollbars = BoolV(json, "CfgWin9xBrowserScrollbars", c.CfgWin9xBrowserScrollbars);
-            return c;
+            return new NetConfig
+            {
+                ProxyScheme = "none", ProxyHost = "", ProxyPort = 9050,
+                BypassList = "", ProfileName = "default",
+            };
         }
 
-        private static string Str(string json, string key, string def)
+        public static string DefaultPath
         {
-            var m = System.Text.RegularExpressions.Regex.Match(
-                json, "\"" + key + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
-            return m.Success ? m.Groups[1].Value.Replace("\\\"", "\"").Replace("\\\\", "\\") : def;
+            get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "AlohaNet.json"); }
         }
-        private static int IntV(string json, string key, int def)
+
+        public void Save() { Save(DefaultPath); }
+        public void Save(string path)
         {
-            var m = System.Text.RegularExpressions.Regex.Match(
-                json, "\"" + key + "\"\\s*:\\s*(\\d+)");
-            return m.Success ? int.Parse(m.Groups[1].Value) : def;
+            var ser = new DataContractJsonSerializer(typeof(NetConfig));
+            using (var fs = File.Create(path)) ser.WriteObject(fs, this);
         }
-        private static bool BoolV(string json, string key, bool def)
+
+        public static NetConfig Load() { return Load(DefaultPath); }
+        public static NetConfig Load(string path)
         {
-            var m = System.Text.RegularExpressions.Regex.Match(
-                json, "\"" + key + "\"\\s*:\\s*(true|false)");
-            return m.Success ? m.Groups[1].Value == "true" : def;
+            if (!File.Exists(path)) return new NetConfig();
+            try
+            {
+                var ser = new DataContractJsonSerializer(typeof(NetConfig));
+                using (var fs = File.OpenRead(path))
+                    return (ser.ReadObject(fs) as NetConfig) ?? new NetConfig();
+            }
+            catch { return new NetConfig(); }
+        }
+
+        // Copy every instance field from another config into this one. Used when
+        // loading a named profile: existing references to this object (the panels
+        // all hold the same cfg) then see the new values instead of being left
+        // pointing at a stale config.
+        public void CopyFrom(NetConfig other)
+        {
+            if (other == null) return;
+            foreach (var f in typeof(NetConfig).GetFields(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (f.IsInitOnly || f.IsLiteral) continue;
+                f.SetValue(this, f.GetValue(other));
+            }
         }
     }
 }

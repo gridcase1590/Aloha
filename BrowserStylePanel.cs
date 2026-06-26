@@ -12,30 +12,36 @@ namespace Aloha
     //
     // Uses LiteFrame (grey-gradient header) to match the other config panels.
     // ============================================================
-    public class BrowserStylePanel : LiteFrame
+    public class BrowserStylePanel : DafyFrame
     {
         private readonly NetConfig cfg;
         private readonly Action onApply;
 
         private CheckBox cWallpaper;
+        private CheckBox cShowBookmark;
 
         public BrowserStylePanel(NetConfig config, Action applyCallback)
-            : base("Browser Style")
+            : base("OPT-STYL", "Browser Style")
         {
             cfg = config;
             onApply = applyCallback;
 
-            Size = new Size(460, 250);
+            Size = new Size(460, 360);
             Font = new Font("Tahoma", 8.25f);
+
+            // decorative black strip, exactly 2 grid squares (64px) tall, at the bottom
+            var body = new Panel { Dock = DockStyle.Bottom, Height = 64, BackColor = Color.Black };
+            ClientArea.Controls.Add(body);
 
             var scroll = new Panel
             {
                 Dock = DockStyle.Fill,
                 AutoScroll = true,
-                BackColor = Color.FromArgb(245, 245, 246),
+                BackColor = Color.FromArgb(0xFA, 0xFA, 0xFB),
                 Padding = new Padding(14, 10, 14, 10)
             };
             ClientArea.Controls.Add(scroll);
+            scroll.BringToFront();
 
             int y = 6;
             y = Group(scroll, "Home page  ·  wallpaper", y);
@@ -58,24 +64,21 @@ namespace Aloha
             };
             scroll.Controls.Add(note);
 
-            // ── apply / close bar ──
-            var btnApply = new RoundButton { Text = "Apply", Width = 90, Height = 26 };
-            var btnClose = new RoundButton { Text = "Close", Width = 80, Height = 26 };
-            var bar = new Panel { Dock = DockStyle.Bottom, Height = 38, BackColor = Color.Transparent };
-            btnApply.Click += (s, e) => Apply();
-            btnClose.Click += (s, e) => Close();
-            bar.Controls.Add(btnApply);
-            bar.Controls.Add(btnClose);
-            void LayoutBar()
+            y += 22;
+            y = Group(scroll, "Toolbar", y);
+            cShowBookmark = new CheckBox
             {
-                btnClose.Left = bar.ClientSize.Width - btnClose.Width - 10;
-                btnClose.Top = 6;
-                btnApply.Left = btnClose.Left - btnApply.Width - 8;
-                btnApply.Top = 6;
-            }
-            bar.Resize += (s, e) => LayoutBar();
-            ClientArea.Controls.Add(bar);
-            this.Shown += (s, e) => LayoutBar();
+                Text = "Show the bookmark \u2605 button in the address bar",
+                Left = 6, Top = y, Width = 420, Checked = cfg.ShowBookmarkButton,
+                ForeColor = Color.Black, BackColor = Color.Transparent,
+                FlatStyle = FlatStyle.Flat
+            };
+            scroll.Controls.Add(cShowBookmark);
+            y += 26;
+
+            // ── apply / close bar ──
+            // Apply in the DafyFrame footer; close is provided by the frame
+            MakeLabeledButton("Apply", () => Apply());
         }
 
         private int Group(Panel host, string title, int y)
@@ -85,12 +88,11 @@ namespace Aloha
             {
                 Text = title, Left = 0, Top = y, AutoSize = true,
                 Font = new Font("Tahoma", 8.25f, FontStyle.Bold),
-                ForeColor = Color.FromArgb(0x60, 0x00, 0x10)
+                ForeColor = Color.Black
             };
             host.Controls.Add(l);
             y += 20;
-            var rule = new Panel { Left = 0, Top = y - 2, Width = 420, Height = 1, BackColor = Color.FromArgb(0x88, 0x88, 0x88) };
-            host.Controls.Add(rule);
+            // (no divider rule — removed)
             return y + 4;
         }
 
@@ -98,6 +100,7 @@ namespace Aloha
         {
             cfg.WallpaperEnabled = cWallpaper.Checked;
             cfg.Wallpaper = "blueprint.svg";   // Blueprint is the only shipped wallpaper for now
+            cfg.ShowBookmarkButton = cShowBookmark.Checked;
             cfg.Save();
             onApply?.Invoke();
         }

@@ -48,6 +48,7 @@ namespace Aloha
             vbar = new DarkScrollBar(false, light: true) { Dock = DockStyle.None };
             hbar = new DarkScrollBar(true,  light: true) { Dock = DockStyle.None };
             corner = new Panel { BackColor = Modern };   // fills the bottom-right scrollbar corner
+            StyleAlohaCorner(corner, true);              // gray cube + aloha resize arrow
 
             // ── controls in the shared one-row footer (left side) ──
             btnStart = MakeLabeledButton("Start", ToggleProxy);
