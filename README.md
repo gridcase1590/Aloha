@@ -11,7 +11,10 @@ Inspired by DarkFantasy
 - [.NET Framework 4.8](https://dotnet.microsoft.com/download/dotnet-framework/net48)
 - [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
   (already present on most Windows 10/11 installs)
-
+- v2ray
+- xray
+- openvpn community
+- tor 
 ## Build
 
 Open `Aloha.csproj` in Visual Studio (2022 or newer) and build for **x64**, or:
